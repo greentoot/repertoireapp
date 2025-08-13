@@ -1,12 +1,13 @@
-// Repertoire Flutter - version améliorée
-// Dépendances (ajoute dans pubspec.yaml):
-//   shared_preferences: ^2.0.15
-//   url_launcher: ^6.1.7
+// main.dart
+// Dépendances requises dans pubspec.yaml : shared_preferences, url_launcher, image_picker
 
 import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:image_picker/image_picker.dart';
 
 void main() {
   runApp(RepertoireApp());
@@ -19,7 +20,8 @@ class RepertoireApp extends StatelessWidget {
       title: 'Répertoire amélioré',
       theme: ThemeData(
         primarySwatch: Colors.indigo,
-        colorScheme: ColorScheme.fromSwatch(primarySwatch: Colors.indigo).copyWith(secondary: Colors.teal),
+        colorScheme:
+            ColorScheme.fromSwatch(primarySwatch: Colors.indigo).copyWith(secondary: Colors.teal),
       ),
       home: ContactListScreen(),
     );
@@ -31,14 +33,22 @@ class Contact {
   final String name;
   final String phone;
   final String email;
+  final String? imagePath; // chemin local vers l'image
 
-  Contact({required this.id, required this.name, required this.phone, required this.email});
+  Contact({
+    required this.id,
+    required this.name,
+    required this.phone,
+    required this.email,
+    this.imagePath,
+  });
 
   factory Contact.fromMap(Map<String, dynamic> m) => Contact(
         id: m['id'] as String,
         name: m['name'] as String,
         phone: m['phone'] as String,
         email: m['email'] as String,
+        imagePath: m['imagePath'] != null ? m['imagePath'] as String : null,
       );
 
   Map<String, dynamic> toMap() => {
@@ -46,6 +56,7 @@ class Contact {
         'name': name,
         'phone': phone,
         'email': email,
+        'imagePath': imagePath,
       };
 }
 
@@ -92,7 +103,10 @@ class _ContactListScreenState extends State<ContactListScreen> {
       ];
       await _saveContacts();
     } else {
-      _contacts = raw.map((s) => Contact.fromMap(jsonDecode(s))).toList();
+      _contacts = raw.map((s) {
+        final Map<String, dynamic> m = jsonDecode(s) as Map<String, dynamic>;
+        return Contact.fromMap(m);
+      }).toList();
     }
 
     _applySort();
@@ -109,7 +123,9 @@ class _ContactListScreenState extends State<ContactListScreen> {
   }
 
   void _applySort() {
-    _contacts.sort((a, b) => _sortAZ ? a.name.toLowerCase().compareTo(b.name.toLowerCase()) : b.name.toLowerCase().compareTo(a.name.toLowerCase()));
+    _contacts.sort((a, b) => _sortAZ
+        ? a.name.toLowerCase().compareTo(b.name.toLowerCase())
+        : b.name.toLowerCase().compareTo(a.name.toLowerCase()));
   }
 
   void _updateFiltered() {
@@ -117,7 +133,12 @@ class _ContactListScreenState extends State<ContactListScreen> {
     if (q.isEmpty) {
       _filtered = _showAll ? List.from(_contacts) : [];
     } else {
-      _filtered = _contacts.where((c) => c.name.toLowerCase().contains(q) || c.phone.contains(q) || c.email.toLowerCase().contains(q)).toList();
+      _filtered = _contacts
+          .where((c) =>
+              c.name.toLowerCase().contains(q) ||
+              c.phone.contains(q) ||
+              c.email.toLowerCase().contains(q))
+          .toList();
     }
     setState(() {});
   }
@@ -175,6 +196,17 @@ class _ContactListScreenState extends State<ContactListScreen> {
     final int hash = id.codeUnits.fold(0, (p, e) => p + e);
     final colors = [Colors.indigo, Colors.teal, Colors.deepPurple, Colors.orange, Colors.blueGrey];
     return colors[hash % colors.length];
+  }
+
+  ImageProvider? _avatarImageProvider(Contact contact) {
+    if (contact.imagePath == null) return null;
+    try {
+      final f = File(contact.imagePath!);
+      if (f.existsSync()) return FileImage(f);
+      return null;
+    } catch (_) {
+      return null;
+    }
   }
 
   @override
@@ -235,6 +267,7 @@ class _ContactListScreenState extends State<ContactListScreen> {
                           itemCount: _filtered.length,
                           itemBuilder: (context, index) {
                             final contact = _filtered[index];
+                            final avatarImage = _avatarImageProvider(contact);
                             return Dismissible(
                               key: ValueKey(contact.id),
                               background: Container(color: Colors.redAccent, alignment: Alignment.centerLeft, padding: EdgeInsets.only(left: 20), child: Icon(Icons.delete, color: Colors.white)),
@@ -242,8 +275,9 @@ class _ContactListScreenState extends State<ContactListScreen> {
                               onDismissed: (_) => _deleteContact(contact),
                               child: ListTile(
                                 leading: CircleAvatar(
-                                  backgroundColor: _avatarColor(contact.id),
-                                  child: Text(contact.name.isNotEmpty ? contact.name[0].toUpperCase() : '?', style: TextStyle(color: Colors.white)),
+                                  backgroundImage: avatarImage,
+                                  backgroundColor: avatarImage == null ? _avatarColor(contact.id) : null,
+                                  child: avatarImage == null ? Text(contact.name.isNotEmpty ? contact.name[0].toUpperCase() : '?', style: TextStyle(color: Colors.white)) : null,
                                 ),
                                 title: Text(contact.name),
                                 subtitle: Text('${contact.phone} • ${contact.email}'),
@@ -286,8 +320,14 @@ class _ContactListScreenState extends State<ContactListScreen> {
           );
 
           if (newContact != null) {
-            // ensure unique id
-            final created = Contact(id: _generateId(), name: newContact.name, phone: newContact.phone, email: newContact.email);
+            // ensure unique id and preserve imagePath
+            final created = Contact(
+              id: _generateId(),
+              name: newContact.name,
+              phone: newContact.phone,
+              email: newContact.email,
+              imagePath: newContact.imagePath,
+            );
             _contacts.add(created);
             _applySort();
             await _saveContacts();
@@ -313,12 +353,16 @@ class _ContactFormState extends State<ContactForm> {
   late TextEditingController _phoneCtrl;
   late TextEditingController _emailCtrl;
 
+  final ImagePicker _picker = ImagePicker();
+  String? _imagePath;
+
   @override
   void initState() {
     super.initState();
     _nameCtrl = TextEditingController(text: widget.contact?.name ?? '');
     _phoneCtrl = TextEditingController(text: widget.contact?.phone ?? '');
     _emailCtrl = TextEditingController(text: widget.contact?.email ?? '');
+    _imagePath = widget.contact?.imagePath;
   }
 
   @override
@@ -329,6 +373,63 @@ class _ContactFormState extends State<ContactForm> {
     super.dispose();
   }
 
+  Future<void> _pickImage(ImageSource source) async {
+    try {
+      final picked = await _picker.pickImage(source: source, maxWidth: 1200, maxHeight: 1200, imageQuality: 85);
+      if (picked != null) {
+        setState(() {
+          _imagePath = picked.path;
+        });
+      }
+    } catch (e) {
+      // ignore errors for now, optionally show snackbar
+    }
+  }
+
+  void _showImageSourceSheet() {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Wrap(
+          children: [
+            ListTile(
+              leading: Icon(Icons.photo_library),
+              title: Text('Galerie'),
+              onTap: () {
+                Navigator.of(ctx).pop();
+                _pickImage(ImageSource.gallery);
+              },
+            ),
+            ListTile(
+              leading: Icon(Icons.camera_alt),
+              title: Text('Appareil photo'),
+              onTap: () {
+                Navigator.of(ctx).pop();
+                _pickImage(ImageSource.camera);
+              },
+            ),
+            if (_imagePath != null)
+              ListTile(
+                leading: Icon(Icons.delete),
+                title: Text('Supprimer la photo'),
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  setState(() {
+                    _imagePath = null;
+                  });
+                },
+              ),
+            ListTile(
+              leading: Icon(Icons.close),
+              title: Text('Annuler'),
+              onTap: () => Navigator.of(ctx).pop(),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _save() {
     if (_formKey.currentState?.validate() ?? false) {
       final c = Contact(
@@ -336,6 +437,7 @@ class _ContactFormState extends State<ContactForm> {
         name: _nameCtrl.text.trim(),
         phone: _phoneCtrl.text.trim(),
         email: _emailCtrl.text.trim(),
+        imagePath: _imagePath,
       );
       Navigator.of(context).pop(c);
     }
@@ -355,13 +457,15 @@ class _ContactFormState extends State<ContactForm> {
 
   String? _validateEmail(String? v) {
     if (v == null || v.trim().isEmpty) return null; // optionnel
-    final pattern = RegExp(r"^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}\$");
+    final pattern = RegExp(r'^[\w\.-]+@([\w-]+\.)+[\w-]{2,4}$');
     if (!pattern.hasMatch(v.trim())) return 'Email invalide';
     return null;
   }
 
   @override
   Widget build(BuildContext context) {
+    final avatar = _imagePath != null && File(_imagePath!).existsSync() ? FileImage(File(_imagePath!)) : null;
+
     return Padding(
       padding: const EdgeInsets.all(16.0),
       child: SingleChildScrollView(
@@ -381,6 +485,16 @@ class _ContactFormState extends State<ContactForm> {
               key: _formKey,
               child: Column(
                 children: [
+                  GestureDetector(
+                    onTap: _showImageSourceSheet,
+                    child: CircleAvatar(
+                      radius: 40,
+                      backgroundImage: avatar,
+                      backgroundColor: avatar == null ? Colors.indigo : null,
+                      child: avatar == null ? Icon(Icons.camera_alt, size: 36, color: Colors.white) : null,
+                    ),
+                  ),
+                  SizedBox(height: 12),
                   TextFormField(
                     controller: _nameCtrl,
                     validator: _validateName,
@@ -452,6 +566,8 @@ class ContactDetailsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final imageProvider = (contact.imagePath != null && File(contact.imagePath!).existsSync()) ? FileImage(File(contact.imagePath!)) : null;
+
     return Scaffold(
       appBar: AppBar(
         title: Text('Détails'),
@@ -481,7 +597,11 @@ class ContactDetailsScreen extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.start,
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            CircleAvatar(radius: 44, child: Text(contact.name.isNotEmpty ? contact.name[0].toUpperCase() : '?', style: TextStyle(fontSize: 30)),),
+            CircleAvatar(
+              radius: 44,
+              backgroundImage: imageProvider,
+              child: imageProvider == null ? Text(contact.name.isNotEmpty ? contact.name[0].toUpperCase() : '?', style: TextStyle(fontSize: 30)) : null,
+            ),
             SizedBox(height: 12),
             Text(contact.name, style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
             SizedBox(height: 8),
