@@ -1,7 +1,12 @@
+// Repertoire Flutter - version améliorée
+// Dépendances (ajoute dans pubspec.yaml):
+//   shared_preferences: ^2.0.15
+//   url_launcher: ^6.1.7
+
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:flutter/services.dart';
 
 void main() {
   runApp(RepertoireApp());
@@ -11,15 +16,37 @@ class RepertoireApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Répertoire Téléphonique',
+      title: 'Répertoire amélioré',
       theme: ThemeData(
-        primaryColor: Colors.blue,
-        colorScheme: ColorScheme.fromSwatch(
-            primarySwatch: Colors.blue, accentColor: Colors.teal),
+        primarySwatch: Colors.indigo,
+        colorScheme: ColorScheme.fromSwatch(primarySwatch: Colors.indigo).copyWith(secondary: Colors.teal),
       ),
       home: ContactListScreen(),
     );
   }
+}
+
+class Contact {
+  final String id;
+  final String name;
+  final String phone;
+  final String email;
+
+  Contact({required this.id, required this.name, required this.phone, required this.email});
+
+  factory Contact.fromMap(Map<String, dynamic> m) => Contact(
+        id: m['id'] as String,
+        name: m['name'] as String,
+        phone: m['phone'] as String,
+        email: m['email'] as String,
+      );
+
+  Map<String, dynamic> toMap() => {
+        'id': id,
+        'name': name,
+        'phone': phone,
+        'email': email,
+      };
 }
 
 class ContactListScreen extends StatefulWidget {
@@ -28,230 +55,364 @@ class ContactListScreen extends StatefulWidget {
 }
 
 class _ContactListScreenState extends State<ContactListScreen> {
-  List<Contact> contacts = [];
-  List<Contact> displayedContacts = [];
-  final TextEditingController searchController = TextEditingController();
-  bool showAllContacts = false;
+  List<Contact> _contacts = [];
+  List<Contact> _filtered = [];
+  final TextEditingController _searchController = TextEditingController();
+  bool _loading = true;
+  bool _showAll = true;
+  bool _sortAZ = true;
+
+  static const String _storageKey = 'contacts_v2';
 
   @override
   void initState() {
     super.initState();
-    loadContacts();
+    _loadContacts();
+    _searchController.addListener(_onSearchChanged);
   }
 
-  void loadContacts() async {
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadContacts() async {
     final prefs = await SharedPreferences.getInstance();
-    final contactsData = prefs.getStringList('contacts') ?? [];
-    if (contactsData.isNotEmpty) {
-      contacts = contactsData.map((data) {
-        final contactInfo = data.split('|');
-        return Contact(name: contactInfo[0], phoneNumber: contactInfo[1]);
-      }).toList();
-      setState(() {
-        displayedContacts = List.from(contacts);
-      });
-    } else {
-      // Contacts de base
-      final initialContacts = [
-        Contact(name: 'Anthony Loiseau', phoneNumber: '0767400388'),
-        Contact(name: 'Dorian Reanrd', phoneNumber: '0716637469'),
-        Contact(name: 'Antoine Thaillay', phoneNumber: '0733734809'),
-        Contact(name: 'Gauthier Mayer', phoneNumber: '0781096090'),
-        Contact(name: 'Mathilde Lehec', phoneNumber: '0761828334'),
-        Contact(name: 'Clarisse Milcent', phoneNumber: '0768126711'),
+    final raw = prefs.getStringList(_storageKey) ?? [];
+    if (raw.isEmpty) {
+      // contacts par défaut
+      _contacts = [
+        Contact(id: '1', name: 'Anthony Loiseau', phone: '0747400388', email: 'anthony@example.com'),
+        Contact(id: '2', name: 'Dorian Renard', phone: '0716437469', email: 'dorian@example.com'),
+        Contact(id: '3', name: 'Antoine Thaillay', phone: '0744734809', email: 'antoine@example.com'),
+        Contact(id: '4', name: 'Gauthier Mayer', phone: '0781089090', email: 'gauthier@example.com'),
+        Contact(id: '5', name: 'Mathilde Lehec', phone: '0761845334', email: 'mathilde@example.com'),
+        Contact(id: '6', name: 'Clarisse Milcent', phone: '0768126451', email: 'clarisse@example.com'),
       ];
-
-      contacts.addAll(initialContacts);
-      displayedContacts.addAll(initialContacts);
-      saveContacts();
+      await _saveContacts();
+    } else {
+      _contacts = raw.map((s) => Contact.fromMap(jsonDecode(s))).toList();
     }
+
+    _applySort();
+    _updateFiltered();
+    setState(() {
+      _loading = false;
+    });
   }
 
-  void saveContacts() async {
+  Future<void> _saveContacts() async {
     final prefs = await SharedPreferences.getInstance();
-    final contactsData =
-        contacts.map((c) => "${c.name}|${c.phoneNumber}").toList();
-    prefs.setStringList('contacts', contactsData);
+    final storage = _contacts.map((c) => jsonEncode(c.toMap())).toList();
+    await prefs.setStringList(_storageKey, storage);
   }
 
-  bool contactExists(Contact newContact) {
-    return contacts.any((contact) =>
-        contact.name == newContact.name &&
-        contact.phoneNumber == newContact.phoneNumber);
+  void _applySort() {
+    _contacts.sort((a, b) => _sortAZ ? a.name.toLowerCase().compareTo(b.name.toLowerCase()) : b.name.toLowerCase().compareTo(a.name.toLowerCase()));
   }
 
-  void addNewContact(Contact newContact) {
-    if (!contactExists(newContact)) {
-      contacts.add(newContact);
-      displayedContacts.add(newContact);
-      saveContacts();
+  void _updateFiltered() {
+    final q = _searchController.text.trim().toLowerCase();
+    if (q.isEmpty) {
+      _filtered = _showAll ? List.from(_contacts) : [];
     } else {
-      showDialog(
-        context: context,
-        builder: (BuildContext context) {
-          return AlertDialog(
-            title: Text('Contact déjà existant'),
-            content: Text('Ce contact existe déjà dans votre répertoire.'),
-            actions: <Widget>[
-              TextButton(
-                child: Text('OK'),
-                onPressed: () {
-                  Navigator.of(context).pop();
-                },
-              ),
-            ],
-          );
+      _filtered = _contacts.where((c) => c.name.toLowerCase().contains(q) || c.phone.contains(q) || c.email.toLowerCase().contains(q)).toList();
+    }
+    setState(() {});
+  }
+
+  void _onSearchChanged() => _updateFiltered();
+
+  String _generateId() => DateTime.now().microsecondsSinceEpoch.toString();
+
+  Future<void> _addOrEditContact({Contact? existing}) async {
+    final result = await showModalBottomSheet<Contact?>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+        child: ContactForm(contact: existing),
+      ),
+    );
+
+    if (result != null) {
+      final exists = _contacts.any((c) => c.id == result.id);
+      if (exists) {
+        _contacts = _contacts.map((c) => c.id == result.id ? result : c).toList();
+      } else {
+        _contacts.add(result);
+      }
+      _applySort();
+      await _saveContacts();
+      _updateFiltered();
+    }
+  }
+
+  Future<void> _deleteContact(Contact contact) async {
+    setState(() {
+      _contacts.removeWhere((c) => c.id == contact.id);
+      _updateFiltered();
+    });
+    await _saveContacts();
+
+    ScaffoldMessenger.of(context).clearSnackBars();
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('Contact supprimé'),
+      action: SnackBarAction(
+        label: 'Annuler',
+        onPressed: () async {
+          _contacts.add(contact);
+          _applySort();
+          await _saveContacts();
+          _updateFiltered();
         },
-      );
-    }
+      ),
+    ));
   }
 
-  void filterContacts(String query) {
-    if (query.isEmpty) {
-      setState(() {
-        displayedContacts = showAllContacts ? List.from(contacts) : [];
-      });
-    } else {
-      setState(() {
-        displayedContacts = contacts
-            .where((contact) =>
-                contact.name.toLowerCase().contains(query.toLowerCase()) ||
-                contact.phoneNumber.contains(query))
-            .toList();
-      });
-    }
+  Color _avatarColor(String id) {
+    final int hash = id.codeUnits.fold(0, (p, e) => p + e);
+    final colors = [Colors.indigo, Colors.teal, Colors.deepPurple, Colors.orange, Colors.blueGrey];
+    return colors[hash % colors.length];
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Liste des Contacts'),
-      ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: TextField(
-              controller: searchController,
-              onChanged: (text) {
-                filterContacts(text);
-              },
-              decoration: InputDecoration(
-                labelText: 'Recherche de Contacts',
-              ),
-            ),
-          ),
-          ElevatedButton(
+        title: Text('Répertoire'),
+        actions: [
+          IconButton(
+            icon: Icon(_sortAZ ? Icons.sort_by_alpha : Icons.sort),
+            tooltip: 'Trier',
             onPressed: () {
               setState(() {
-                showAllContacts = !showAllContacts;
-                if (showAllContacts) {
-                  displayedContacts = List.from(contacts);
-                } else {
-                  displayedContacts = [];
-                }
+                _sortAZ = !_sortAZ;
+                _applySort();
+                _updateFiltered();
               });
             },
-            child: Text(showAllContacts
-                ? 'Cacher tous les contacts'
-                : 'Afficher tous les contacts'),
           ),
-          Expanded(
-            child: ListView.builder(
-              itemCount: displayedContacts.length,
-              itemBuilder: (context, index) {
-                final contact = displayedContacts[index];
-                return InkWell(
-                  onTap: () {
-                    Navigator.of(context).push(MaterialPageRoute(
-                      builder: (context) =>
-                          ContactDetailsScreen(contact: contact),
-                    ));
-                  },
-                  child: ListTile(
-                    leading: Icon(Icons.person),
-                    title: Text(contact.name,
-                        style: TextStyle(color: Colors.blue)),
-                    subtitle: Text(contact.phoneNumber,
-                        style: TextStyle(color: Colors.teal)),
-                  ),
-                );
-              },
-            ),
+          IconButton(
+            icon: Icon(_showAll ? Icons.visibility_off : Icons.visibility),
+            tooltip: _showAll ? 'Cacher' : 'Afficher',
+            onPressed: () {
+              setState(() {
+                _showAll = !_showAll;
+                _updateFiltered();
+              });
+            },
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          Navigator.of(context).push(MaterialPageRoute(
-            builder: (context) => AddContactScreen(
-              onSave: (newContact) {
-                addNewContact(newContact);
-              },
+      body: _loading
+          ? Center(child: CircularProgressIndicator())
+          : Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(12.0),
+                  child: TextField(
+                    controller: _searchController,
+                    decoration: InputDecoration(
+                      prefixIcon: Icon(Icons.search),
+                      hintText: 'Rechercher nom, téléphone ou email',
+                      fillColor: Colors.grey[100],
+                      filled: true,
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: _filtered.isEmpty
+                      ? Center(
+                          child: Text(
+                            _searchController.text.isEmpty ? 'Aucun contact affiché' : 'Aucun résultat',
+                            style: TextStyle(fontSize: 16, color: Colors.grey[600]),
+                          ),
+                        )
+                      : ListView.builder(
+                          itemCount: _filtered.length,
+                          itemBuilder: (context, index) {
+                            final contact = _filtered[index];
+                            return Dismissible(
+                              key: ValueKey(contact.id),
+                              background: Container(color: Colors.redAccent, alignment: Alignment.centerLeft, padding: EdgeInsets.only(left: 20), child: Icon(Icons.delete, color: Colors.white)),
+                              secondaryBackground: Container(color: Colors.redAccent, alignment: Alignment.centerRight, padding: EdgeInsets.only(right: 20), child: Icon(Icons.delete_forever, color: Colors.white)),
+                              onDismissed: (_) => _deleteContact(contact),
+                              child: ListTile(
+                                leading: CircleAvatar(
+                                  backgroundColor: _avatarColor(contact.id),
+                                  child: Text(contact.name.isNotEmpty ? contact.name[0].toUpperCase() : '?', style: TextStyle(color: Colors.white)),
+                                ),
+                                title: Text(contact.name),
+                                subtitle: Text('${contact.phone} • ${contact.email}'),
+                                onTap: () async {
+                                  final updated = await Navigator.of(context).push<Contact?>(
+                                    MaterialPageRoute(builder: (_) => ContactDetailsScreen(contact: contact)),
+                                  );
+                                  if (updated != null) {
+                                    // returned contact means edit happened
+                                    final idx = _contacts.indexWhere((c) => c.id == updated.id);
+                                    if (idx != -1) {
+                                      _contacts[idx] = updated;
+                                      _applySort();
+                                      await _saveContacts();
+                                      _updateFiltered();
+                                    }
+                                  }
+                                },
+                                trailing: IconButton(
+                                  icon: Icon(Icons.edit),
+                                  onPressed: () => _addOrEditContact(existing: contact),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ],
             ),
-          ));
-        },
+      floatingActionButton: FloatingActionButton(
         child: Icon(Icons.add),
+        onPressed: () async {
+          final newContact = await showModalBottomSheet<Contact?>(
+            context: context,
+            isScrollControlled: true,
+            builder: (context) => Padding(
+              padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+              child: ContactForm(contact: null),
+            ),
+          );
+
+          if (newContact != null) {
+            // ensure unique id
+            final created = Contact(id: _generateId(), name: newContact.name, phone: newContact.phone, email: newContact.email);
+            _contacts.add(created);
+            _applySort();
+            await _saveContacts();
+            _updateFiltered();
+          }
+        },
       ),
     );
   }
 }
 
-class Contact {
-  final String name;
-  final String phoneNumber;
-
-  Contact({
-    required this.name,
-    required this.phoneNumber,
-  });
-}
-
-class AddContactScreen extends StatefulWidget {
-  final Function(Contact) onSave;
-
-  AddContactScreen({required this.onSave});
+class ContactForm extends StatefulWidget {
+  final Contact? contact;
+  ContactForm({this.contact});
 
   @override
-  _AddContactScreenState createState() => _AddContactScreenState();
+  _ContactFormState createState() => _ContactFormState();
 }
 
-class _AddContactScreenState extends State<AddContactScreen> {
-  final TextEditingController nameController = TextEditingController();
-  final TextEditingController phoneNumberController = TextEditingController();
+class _ContactFormState extends State<ContactForm> {
+  final _formKey = GlobalKey<FormState>();
+  late TextEditingController _nameCtrl;
+  late TextEditingController _phoneCtrl;
+  late TextEditingController _emailCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameCtrl = TextEditingController(text: widget.contact?.name ?? '');
+    _phoneCtrl = TextEditingController(text: widget.contact?.phone ?? '');
+    _emailCtrl = TextEditingController(text: widget.contact?.email ?? '');
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _phoneCtrl.dispose();
+    _emailCtrl.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    if (_formKey.currentState?.validate() ?? false) {
+      final c = Contact(
+        id: widget.contact?.id ?? DateTime.now().microsecondsSinceEpoch.toString(),
+        name: _nameCtrl.text.trim(),
+        phone: _phoneCtrl.text.trim(),
+        email: _emailCtrl.text.trim(),
+      );
+      Navigator.of(context).pop(c);
+    }
+  }
+
+  String? _validatePhone(String? v) {
+    if (v == null || v.trim().isEmpty) return 'Numéro requis';
+    final normalized = v.replaceAll(RegExp(r'[^0-9+]'), '');
+    if (normalized.length < 6) return 'Numéro invalide';
+    return null;
+  }
+
+  String? _validateName(String? v) {
+    if (v == null || v.trim().isEmpty) return 'Nom requis';
+    return null;
+  }
+
+  String? _validateEmail(String? v) {
+    if (v == null || v.trim().isEmpty) return null; // optionnel
+    final pattern = RegExp(r"^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}\$");
+    if (!pattern.hasMatch(v.trim())) return 'Email invalide';
+    return null;
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text('Ajouter un Contact'),
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: SingleChildScrollView(
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            TextField(
-              controller: nameController,
-              decoration: InputDecoration(labelText: 'Nom'),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(widget.contact == null ? 'Ajouter un contact' : 'Modifier le contact', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                IconButton(icon: Icon(Icons.close), onPressed: () => Navigator.of(context).pop()),
+              ],
             ),
-            TextField(
-              controller: phoneNumberController,
-              decoration: InputDecoration(labelText: 'Numéro de téléphone'),
-              keyboardType: TextInputType.phone,
-            ),
-            SizedBox(height: 16.0),
-            ElevatedButton(
-              onPressed: () {
-                final String name = nameController.text;
-                final String phoneNumber = phoneNumberController.text;
-                final newContact =
-                    Contact(name: name, phoneNumber: phoneNumber);
-                widget.onSave(newContact);
-                Navigator.of(context).pop();
-              },
-              child: Text('Ajouter'),
+            SizedBox(height: 8),
+            Form(
+              key: _formKey,
+              child: Column(
+                children: [
+                  TextFormField(
+                    controller: _nameCtrl,
+                    validator: _validateName,
+                    decoration: InputDecoration(labelText: 'Nom', border: OutlineInputBorder()),
+                  ),
+                  SizedBox(height: 8),
+                  TextFormField(
+                    controller: _phoneCtrl,
+                    validator: _validatePhone,
+                    keyboardType: TextInputType.phone,
+                    decoration: InputDecoration(labelText: 'Téléphone', border: OutlineInputBorder()),
+                  ),
+                  SizedBox(height: 8),
+                  TextFormField(
+                    controller: _emailCtrl,
+                    validator: _validateEmail,
+                    keyboardType: TextInputType.emailAddress,
+                    decoration: InputDecoration(labelText: 'Email (optionnel)', border: OutlineInputBorder()),
+                  ),
+                  SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: _save,
+                          child: Text('Enregistrer'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ],
         ),
@@ -262,24 +423,30 @@ class _AddContactScreenState extends State<AddContactScreen> {
 
 class ContactDetailsScreen extends StatelessWidget {
   final Contact contact;
-
   ContactDetailsScreen({required this.contact});
 
-  void _launchPhone(String phoneNumber) async {
-    final url = 'tel:$phoneNumber';
-    if (await canLaunch(url)) {
-      await launch(url);
-    } else {
-      throw 'Impossible de lancer $url';
+  Future<void> _launchPhone(String phone) async {
+    final uri = Uri(scheme: 'tel', path: phone);
+    if (!await launchUrl(uri)) {
+      throw 'Impossible de lancer $uri';
     }
   }
 
-  void _launchMessage(String phoneNumber) async {
-    final url = 'sms:$phoneNumber';
-    if (await canLaunch(url)) {
-      await launch(url);
-    } else {
-      throw 'Impossible de lancer $url';
+  Future<void> _launchSms(String phone) async {
+    final uri = Uri(scheme: 'sms', path: phone);
+    if (!await launchUrl(uri)) {
+      throw 'Impossible de lancer $uri';
+    }
+  }
+
+  Future<void> _launchEmail(String email) async {
+    final uri = Uri(
+      scheme: 'mailto',
+      path: email,
+      queryParameters: {'subject': 'Salut', 'body': 'Bonjour !'},
+    );
+    if (!await launchUrl(uri)) {
+      throw 'Impossible de lancer $uri';
     }
   }
 
@@ -287,31 +454,60 @@ class ContactDetailsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Détails du Contact'),
+        title: Text('Détails'),
+        actions: [
+          IconButton(
+            icon: Icon(Icons.edit),
+            onPressed: () async {
+              final updated = await showModalBottomSheet<Contact?>(
+                context: context,
+                isScrollControlled: true,
+                builder: (context) => Padding(
+                  padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+                  child: ContactForm(contact: contact),
+                ),
+              );
+
+              if (updated != null) {
+                Navigator.of(context).pop(updated); // return updated contact to previous screen
+              }
+            },
+          ),
+        ],
       ),
-      body: Center(
+      body: Padding(
+        padding: const EdgeInsets.all(24.0),
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisAlignment: MainAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            Text(contact.name,
-                style: TextStyle(fontSize: 24, color: Colors.blue)),
-            Text(contact.phoneNumber,
-                style: TextStyle(fontSize: 18, color: Colors.teal)),
-            SizedBox(height: 16),
+            CircleAvatar(radius: 44, child: Text(contact.name.isNotEmpty ? contact.name[0].toUpperCase() : '?', style: TextStyle(fontSize: 30)),),
+            SizedBox(height: 12),
+            Text(contact.name, style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+            SizedBox(height: 8),
+            Text(contact.phone, style: TextStyle(fontSize: 16)),
+            SizedBox(height: 4),
+            Text(contact.email.isNotEmpty ? contact.email : 'Aucun email', style: TextStyle(color: Colors.grey[700])),
+            SizedBox(height: 20),
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                IconButton(
+                ElevatedButton.icon(
+                  onPressed: () => _launchPhone(contact.phone),
                   icon: Icon(Icons.phone),
-                  onPressed: () {
-                    _launchPhone(contact.phoneNumber);
-                  },
+                  label: Text('Appeler'),
                 ),
-                IconButton(
+                SizedBox(width: 12),
+                ElevatedButton.icon(
+                  onPressed: () => _launchSms(contact.phone),
                   icon: Icon(Icons.message),
-                  onPressed: () {
-                    _launchMessage(contact.phoneNumber);
-                  },
+                  label: Text('SMS'),
+                ),
+                SizedBox(width: 12),
+                ElevatedButton.icon(
+                  onPressed: contact.email.isNotEmpty ? () => _launchEmail(contact.email) : null,
+                  icon: Icon(Icons.email),
+                  label: Text('Email'),
                 ),
               ],
             ),
